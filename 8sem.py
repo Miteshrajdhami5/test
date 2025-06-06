@@ -6,13 +6,16 @@ from flask import Flask, render_template_string, Response, jsonify, redirect
 import threading
 from datetime import datetime
 import json
+import cv2
+import face_recognition
+import numpy as np
+import os
 
 # Pin Definitions
 IN1 = OutputDevice(14)  # Connect to motor IN1
 IN2 = OutputDevice(15)  # Connect to motor IN2
 IN3 = OutputDevice(18)  # Connect to motor IN3
 IN4 = OutputDevice(23)  # Connect to motor IN4
-IR_SENSOR_PIN = 17      # Pin connected to the IR sensor's OUT pin
 
 # Step sequence for a 4-phase stepper motor
 step_sequence = [
@@ -26,9 +29,6 @@ step_sequence = [
     [1, 0, 0, 1]   # Activate IN4 + IN1
 ]
 
-# Set up the IR sensor
-ir_sensor = InputDevice(IR_SENSOR_PIN)
-
 # Initialize Flask web server
 app = Flask(__name__)
 
@@ -38,6 +38,91 @@ vehicle_stopped = False
 server_logs = ["System Ready"]
 last_log_time = datetime.now()
 last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"  # Default location
+
+# Load the reference face image (you'll need to place this image on your Raspberry Pi)
+REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.jpg"  # Replace with the actual path to your image
+if not os.path.exists(REFERENCE_IMAGE_PATH):
+    print(f"Error: Reference image {REFERENCE_IMAGE_PATH} not found. Please add the image.")
+    exit()
+
+# Load and encode the reference face
+reference_image = face_recognition.load_image_file(REFERENCE_IMAGE_PATH)
+reference_encoding = face_recognition.face_encodings(reference_image)
+if not reference_encoding:
+    print("Error: No face found in the reference image. Please use a clear image with a visible face.")
+    exit()
+reference_encoding = reference_encoding[0]
+
+# Initialize the camera (using the same index 0 that worked previously)
+camera = cv2.VideoCapture(0)
+if not camera.isOpened():
+    print("Error: Could not open camera")
+    exit()
+
+# Function to capture an image from the camera
+def capture_image():
+    ret, frame = camera.read()
+    if not ret:
+        print("Error: Failed to capture image from camera")
+        return None
+    # Save the captured image temporarily
+    captured_image_path = "/home/mrd/Desktop/captured_face.jpg"
+    cv2.imwrite(captured_image_path, frame)
+    return captured_image_path
+
+# Function to compare faces
+def compare_faces(captured_image_path):
+    try:
+        captured_image = face_recognition.load_image_file(captured_image_path)
+        captured_encodings = face_recognition.face_encodings(captured_image)
+        if not captured_encodings:
+            print("Error: No face found in the captured image")
+            return False
+        captured_encoding = captured_encodings[0]
+        # Compare the captured face with the reference face
+        results = face_recognition.compare_faces([reference_encoding], captured_encoding, tolerance=0.6)
+        return results[0]  # True if match, False if no match
+    except Exception as e:
+        print(f"Error in face comparison: {e}")
+        return False
+
+# Function to send SMS with image link (simulated, as we don't have a real image hosting service)
+def send_image_to_owner(captured_image_path):
+    global server_logs, last_log_time
+    current_time = datetime.now()
+    # Simulate sending an image link (you'd need to upload the image to a server in a real scenario)
+    image_link = f"Simulated Image Link: {captured_image_path}"
+    message = f"""
+    🚨 Unauthorized Access Attempt!!!
+
+    An unknown person tried to start the vehicle.
+    Image: {image_link}
+
+    Reply 'YES' to authorize, or 'NO' to deny.
+    """
+    r = requests.post(
+        "https://sms.aakashsms.com/sms/v3/send/",
+        data={
+            'auth_token': 'a5a492a8f95c9a887b799021d5a447890d9d7bf1e5eeb954b38ebfa9cf76b482',
+            'to': '9818858567',
+            'text': message
+        }
+    )
+    if r.status_code == 200:
+        print("SMS with image link sent successfully!")
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Unauthorized access detected, SMS sent to owner"
+        server_logs.append(new_log)
+        last_log_time = current_time
+    else:
+        print(f"Failed to send SMS: {r.text}")
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to send SMS to owner"
+        server_logs.append(new_log)
+        last_log_time = current_time
+    # Simulate owner response (in a real scenario, you'd need an SMS gateway to receive replies)
+    # For now, assume owner responds after 5 seconds
+    sleep(5)
+    owner_response = "YES"  # Simulate owner authorizing (change to "NO" to test denial)
+    return owner_response
 
 # Function to control the stepper motor
 def set_step(w1, w2, w3, w4):
@@ -77,40 +162,70 @@ def stop_motor():
         last_log_time = current_time
     print("Vehicle stopped!")
 
-# Function to start the motor only when IR sensor detects a finger
-def start_motor_with_ir():
+# Function to start the motor with face recognition
+def start_vehicle_with_face():
     global motor_running, vehicle_stopped, server_logs, last_log_time
     if vehicle_stopped:
-        print("Waiting for finger detection to start the vehicle...")
+        print("Capturing image for face recognition...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
-            new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for finger detection"
+            new_log = f"{current_time.strftime('%H:%M:%S')} - Capturing image for face recognition"
             server_logs.append(new_log)
             last_log_time = current_time
-        previous_finger_state = ir_sensor.is_active
-        while True:
-            current_finger_state = ir_sensor.is_active
-            if current_finger_state != previous_finger_state:
-                if current_finger_state:
-                    print("Finger detected! Starting vehicle...")
-                    current_time = datetime.now()
-                    if (current_time - last_log_time).total_seconds() > 1:
-                        new_log = f"{current_time.strftime('%H:%M:%S')} - Finger detected! Starting vehicle..."
-                        server_logs.append(new_log)
-                        last_log_time = current_time
-                    threading.Thread(target=step_motor_continuous, args=(100,)).start()
-                    vehicle_stopped = False
-                    sleep(2)
-                    break
-            previous_finger_state = current_finger_state
-            sleep(0.1)
-    else:
-        print(".!")
-        current_time = datetime.now()
-        if (current_time - last_log_time).total_seconds() > 1:
-            new_log = f"{current_time.strftime('%H:%M:%S')} - ."
+
+        # Step 1: Capture the image
+        captured_image_path = capture_image()
+        if not captured_image_path:
+            new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
             server_logs.append(new_log)
             last_log_time = current_time
+            return
+
+        # Step 2: Compare with database (reference image)
+        match_found = compare_faces(captured_image_path)
+        if match_found:
+            print("Face match found! Starting vehicle...")
+            current_time = datetime.now()
+            if (current_time - last_log_time).total_seconds() > 1:
+                new_log = f"{current_time.strftime('%H:%M:%S')} - Face match found! Starting vehicle..."
+                server_logs.append(new_log)
+                last_log_time = current_time
+            threading.Thread(target=step_motor_continuous, args=(100,)).start()
+            vehicle_stopped = False
+            send_sms()  # Notify owner of successful start
+        else:
+            print("No face match found. Checking for unauthorized access...")
+            current_time = datetime.now()
+            if (current_time - last_log_time).total_seconds() > 1:
+                new_log = f"{current_time.strftime('%H:%M:%S')} - No face match found. Checking for unauthorized access..."
+                server_logs.append(new_log)
+                last_log_time = current_time
+
+            # Step 3: Send image to owner
+            owner_response = send_image_to_owner(captured_image_path)
+
+            # Step 4: Check if owner authorizes
+            if owner_response.upper() == "YES":
+                print("Owner authorized! Starting vehicle...")
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Owner authorized! Starting vehicle..."
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+                threading.Thread(target=step_motor_continuous, args=(100,)).start()
+                vehicle_stopped = False
+                send_sms()  # Notify owner of successful start
+            else:
+                print("Owner denied access. Access denied.")
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Owner denied access. Access denied."
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+
+        # Step 5: Check location (already handled by get_location())
+        if not vehicle_stopped:
+            get_location()
 
 # Function to send SMS with links
 def send_sms():
@@ -170,7 +285,7 @@ def stop_motor_web():
 def start_motor_web():
     global server_logs
     print("Starting vehicle via web...")
-    threading.Thread(target=start_motor_with_ir).start()
+    threading.Thread(target=start_vehicle_with_face).start()
     sleep(2)
     return jsonify({"logs": server_logs})
 
@@ -314,7 +429,7 @@ def index():
                     {% endfor %}
                 </div>
                 <div class="bottom-button">
-                    <a href="{{ map_redirect_url }}" class="control-btn">Open Latest Map</a>
+                    <a href="{{ map_redirect_url }}" class="control_setup.pybtn">Open Latest Map</a>
                 </div>
                 <footer>2025</footer>
             </div>
@@ -376,27 +491,20 @@ flask_thread.daemon = True
 flask_thread.start()
 
 try:
-    print("Waiting for Key detection...")
+    print("Waiting for face recognition to start the vehicle...")
     current_time = datetime.now()
     if (current_time - last_log_time).total_seconds() > 1:
-        new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for Key detection..."
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for face recognition..."
         server_logs.append(new_log)
         last_log_time = current_time
-    previous_finger_state = ir_sensor.is_active
 
     while True:
-        current_finger_state = ir_sensor.is_active
-        if current_finger_state != previous_finger_state:
-            if current_finger_state and not motor_running and not vehicle_stopped:
-                print("Key detected! Starting vehicle...")
-                threading.Thread(target=step_motor_continuous, args=(100,)).start()
-                send_sms()
-                sleep(2)
-        previous_finger_state = current_finger_state
-        sleep(0.1)
+        start_vehicle_with_face()
+        sleep(5)  # Wait before attempting another recognition (adjust as needed)
 
 except KeyboardInterrupt:
     print("Program stopped by user.")
 finally:
     print("Cleaning up...")
     stop_motor()
+    camera.release()
