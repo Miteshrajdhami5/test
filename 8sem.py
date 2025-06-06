@@ -1,8 +1,8 @@
 import requests
 import serial
-from gpiozero import OutputDevice, InputDevice
+from gpiozero import OutputDevice
 from time import sleep
-from flask import Flask, render_template_string, Response, jsonify, redirect
+from flask import Flask, render_template_string, Response, jsonify, redirect, request
 import threading
 from datetime import datetime
 import json
@@ -38,22 +38,18 @@ vehicle_stopped = False
 server_logs = ["System Ready"]
 last_log_time = datetime.now()
 last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"  # Default location
+pending_authorization = False  # Flag to track if authorization is pending
 
-# Load the reference face image (you'll need to place this image on your Raspberry Pi)
-REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"  # Changed to .png
+# Load the reference face image
+REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"
 if not os.path.exists(REFERENCE_IMAGE_PATH):
     print(f"Error: Reference image {REFERENCE_IMAGE_PATH} not found. Please add the image.")
     exit()
 
-# Load and encode the reference face
 reference_image = face_recognition.load_image_file(REFERENCE_IMAGE_PATH)
-reference_encoding = face_recognition.face_encodings(reference_image)
-if not reference_encoding:
-    print("Error: No face found in the reference image. Please use a clear image with a visible face.")
-    exit()
-reference_encoding = reference_encoding[0]
+reference_encoding = face_recognition.face_encodings(reference_image)[0]
 
-# Initialize the camera (using the same index 0 that worked previously)
+# Initialize the camera
 camera = cv2.VideoCapture(0)
 if not camera.isOpened():
     print("Error: Could not open camera")
@@ -65,8 +61,7 @@ def capture_image():
     if not ret:
         print("Error: Failed to capture image from camera")
         return None
-    # Save the captured image temporarily
-    captured_image_path = "/home/mrd/Desktop/captured_face.png"  # Changed to .png
+    captured_image_path = "/home/mrd/Desktop/captured_face.png"
     cv2.imwrite(captured_image_path, frame)
     return captured_image_path
 
@@ -79,50 +74,11 @@ def compare_faces(captured_image_path):
             print("Error: No face found in the captured image")
             return False
         captured_encoding = captured_encodings[0]
-        # Compare the captured face with the reference face
         results = face_recognition.compare_faces([reference_encoding], captured_encoding, tolerance=0.6)
-        return results[0]  # True if match, False if no match
+        return results[0]
     except Exception as e:
         print(f"Error in face comparison: {e}")
         return False
-
-# Function to send SMS with image link (simulated, as we don't have a real image hosting service)
-def send_image_to_owner(captured_image_path):
-    global server_logs, last_log_time
-    current_time = datetime.now()
-    # Simulate sending an image link (you'd need to upload the image to a server in a real scenario)
-    image_link = f"Simulated Image Link: {captured_image_path}"
-    message = f"""
-    🚨 Unauthorized Access Attempt!!!
-
-    An unknown person tried to start the vehicle.
-    Image: {image_link}
-
-    Reply 'YES' to authorize, or 'NO' to deny.
-    """
-    r = requests.post(
-        "https://sms.aakashsms.com/sms/v3/send/",
-        data={
-            'auth_token': 'a5a492a8f95c9a887b799021d5a447890d9d7bf1e5eeb954b38ebfa9cf76b482',
-            'to': '9818858567',
-            'text': message
-        }
-    )
-    if r.status_code == 200:
-        print("SMS with image link sent successfully!")
-        new_log = f"{current_time.strftime('%H:%M:%S')} - Unauthorized access detected, SMS sent to owner"
-        server_logs.append(new_log)
-        last_log_time = current_time
-    else:
-        print(f"Failed to send SMS: {r.text}")
-        new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to send SMS to owner"
-        server_logs.append(new_log)
-        last_log_time = current_time
-    # Simulate owner response (in a real scenario, you'd need an SMS gateway to receive replies)
-    # For now, assume owner responds after 5 seconds
-    sleep(5)
-    owner_response = "YES"  # Simulate owner authorizing (change to "NO" to test denial)
-    return owner_response
 
 # Function to control the stepper motor
 def set_step(w1, w2, w3, w4):
@@ -164,7 +120,7 @@ def stop_motor():
 
 # Function to start the motor with face recognition
 def start_vehicle_with_face():
-    global motor_running, vehicle_stopped, server_logs, last_log_time
+    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization
     if vehicle_stopped:
         print("Capturing image for face recognition...")
         current_time = datetime.now()
@@ -173,7 +129,6 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Step 1: Capture the image
         captured_image_path = capture_image()
         if not captured_image_path:
             new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
@@ -181,7 +136,6 @@ def start_vehicle_with_face():
             last_log_time = current_time
             return
 
-        # Step 2: Compare with database (reference image)
         match_found = compare_faces(captured_image_path)
         if match_found:
             print("Face match found! Starting vehicle...")
@@ -192,7 +146,7 @@ def start_vehicle_with_face():
                 last_log_time = current_time
             threading.Thread(target=step_motor_continuous, args=(100,)).start()
             vehicle_stopped = False
-            send_sms()  # Notify owner of successful start
+            send_sms()
         else:
             print("No face match found. Checking for unauthorized access...")
             current_time = datetime.now()
@@ -200,32 +154,8 @@ def start_vehicle_with_face():
                 new_log = f"{current_time.strftime('%H:%M:%S')} - No face match found. Checking for unauthorized access..."
                 server_logs.append(new_log)
                 last_log_time = current_time
-
-            # Step 3: Send image to owner
-            owner_response = send_image_to_owner(captured_image_path)
-
-            # Step 4: Check if owner authorizes
-            if owner_response.upper() == "YES":
-                print("Owner authorized! Starting vehicle...")
-                current_time = datetime.now()
-                if (current_time - last_log_time).total_seconds() > 1:
-                    new_log = f"{current_time.strftime('%H:%M:%S')} - Owner authorized! Starting vehicle..."
-                    server_logs.append(new_log)
-                    last_log_time = current_time
-                threading.Thread(target=step_motor_continuous, args=(100,)).start()
-                vehicle_stopped = False
-                send_sms()  # Notify owner of successful start
-            else:
-                print("Owner denied access. Access denied.")
-                current_time = datetime.now()
-                if (current_time - last_log_time).total_seconds() > 1:
-                    new_log = f"{current_time.strftime('%H:%M:%S')} - Owner denied access. Access denied."
-                    server_logs.append(new_log)
-                    last_log_time = current_time
-
-        # Step 5: Check location (already handled by get_location())
-        if not vehicle_stopped:
-            get_location()
+            send_image_to_owner(captured_image_path)
+            pending_authorization = True  # Set flag to show authorization page
 
 # Function to send SMS with links
 def send_sms():
@@ -251,7 +181,38 @@ def send_sms():
     else:
         print(f"Failed to send SMS: {r.text}")
 
-# Modified GPS functions (simplified since we're using a static location)
+# Function to send SMS with image link (simulated)
+def send_image_to_owner(captured_image_path):
+    global server_logs, last_log_time
+    current_time = datetime.now()
+    image_link = f"Simulated Image Link: {captured_image_path}"
+    message = f"""
+    🚨 Unauthorized Access Attempt!!!
+
+    An unknown person tried to start the vehicle.
+    Image: {image_link}
+    Check authorization on: http://192.168.10.86:5000
+    """
+    r = requests.post(
+        "https://sms.aakashsms.com/sms/v3/send/",
+        data={
+            'auth_token': 'a5a492a8f95c9a887b799021d5a447890d9d7bf1e5eeb954b38ebfa9cf76b482',
+            'to': '9818858567',
+            'text': message
+        }
+    )
+    if r.status_code == 200:
+        print("SMS with image link sent successfully!")
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Unauthorized access detected, SMS sent to owner"
+        server_logs.append(new_log)
+        last_log_time = current_time
+    else:
+        print(f"Failed to send SMS: {r.text}")
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to send SMS to owner"
+        server_logs.append(new_log)
+        last_log_time = current_time
+
+# Modified GPS functions
 def get_location():
     global server_logs, last_log_time, last_gps_location
     fixed_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"
@@ -301,16 +262,79 @@ def redirect_to_map():
     fixed_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"
     return redirect(fixed_location)
 
+@app.route('/authorize', methods=['GET', 'POST'])
+def authorize():
+    global server_logs, last_log_time, pending_authorization, vehicle_stopped
+    current_time = datetime.now()
+    if request.method == 'POST':
+        action = request.form.get('action')
+        if action == 'yes':
+            print("Owner authorized via web! Starting vehicle...")
+            if (current_time - last_log_time).total_seconds() > 1:
+                new_log = f"{current_time.strftime('%H:%M:%S')} - Owner authorized via web! Starting vehicle..."
+                server_logs.append(new_log)
+                last_log_time = current_time
+            threading.Thread(target=step_motor_continuous, args=(100,)).start()
+            vehicle_stopped = False
+            send_sms()
+            pending_authorization = False
+        elif action == 'no':
+            print("Owner denied access via web.")
+            if (current_time - last_log_time).total_seconds() > 1:
+                new_log = f"{current_time.strftime('%H:%M:%S')} - Owner denied access via web."
+                server_logs.append(new_log)
+                last_log_time = current_time
+            pending_authorization = False
+        return redirect('/')
+    elif pending_authorization:
+        captured_image_path = "/home/mrd/Desktop/captured_face.png"
+        return render_template_string("""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Authorize Access</title>
+                <style>
+                    body { background: #1a2535; color: #fff; font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+                    img { max-width: 100%; height: auto; margin: 20px 0; }
+                    .button-group { display: flex; justify-content: center; gap: 10px; }
+                    button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #4a69bd; color: #fff; border: none; border-radius: 5px; }
+                    button:hover { background: #ff4d6d; }
+                </style>
+            </head>
+            <body>
+                <h1>Unauthorized Access Attempt</h1>
+                <p>Please verify the captured image and authorize access.</p>
+                <img src="/captured_image" alt="Captured Face">
+                <form method="POST">
+                    <div class="button-group">
+                        <button type="submit" name="action" value="yes">Yes</button>
+                        <button type="submit" name="action" value="no">No</button>
+                    </div>
+                </form>
+            </body>
+            </html>
+        """)
+    return redirect('/')
+
+@app.route('/captured_image')
+def captured_image():
+    return send_file("/home/mrd/Desktop/captured_face.png", mimetype='image/png')
+
 @app.route('/stream')
 def stream():
-    return Response(stream_logs(), mimetype='text/event-source')
+    return Response(stream_logs(), mimetype='text/event-stream')
 
 @app.route('/')
 def index():
+    global pending_authorization
     start_url = 'http://192.168.10.86:5000/start_vehicle'
     stop_url = 'http://192.168.10.86:5000/stop_vehicle'
     location_url = 'http://192.168.10.86:5000/send_location'
     map_redirect_url = 'http://192.168.10.86:5000/redirect_to_map'
+    if pending_authorization:
+        return redirect('/authorize')
     return render_template_string("""
         <!DOCTYPE html>
         <html lang="en">
@@ -320,99 +344,20 @@ def index():
             <title>Vehicle Control Dashboard</title>
             <style>
                 * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Arial', sans-serif; }
-                body { 
-                    background: #1a2535; 
-                    min-height: 100vh; 
-                    display: flex; 
-                    justify-content: center; 
-                    align-items: center; 
-                    padding: 20px; 
-                    color: #fff; 
-                }
-                .container { 
-                    background: rgba(255, 255, 255, 0.1); 
-                    backdrop-filter: blur(10px); 
-                    border-radius: 15px; 
-                    padding: 30px; 
-                    width: 100%; 
-                    max-width: 400px; 
-                    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3); 
-                    border: 1px solid rgba(255, 255, 255, 0.1); 
-                    text-align: center; 
-                }
-                h1 { 
-                    font-size: 2.2em; 
-                    color: #ff4d6d; 
-                    margin-bottom: 20px; 
-                    text-shadow: 0 0 10px rgba(255, 77, 109, 0.5); 
-                }
-                .button-group { 
-                    display: flex; 
-                    flex-direction: column; 
-                    gap: 15px; 
-                    margin-bottom: 20px; 
-                }
-                .control-btn { 
-                    display: inline-block; 
-                    padding: 15px; 
-                    font-size: 1.1em; 
-                    text-decoration: none; 
-                    color: #fff; 
-                    background: linear-gradient(90deg, #ff4d6d, #4a69bd); 
-                    border: none; 
-                    border-radius: 25px; 
-                    width: 100%; 
-                    cursor: pointer; 
-                    transition: transform 0.3s, box-shadow 0.3s; 
-                    box-shadow: 0 5px 15px rgba(255, 77, 109, 0.4); 
-                }
-                .control-btn:hover { 
-                    transform: translateY(-5px); 
-                    box-shadow: 0 8px 25px rgba(255, 77, 109, 0.6); 
-                }
-                .control-btn:active { 
-                    transform: translateY(0); 
-                    box-shadow: 0 3px 10px rgba(255, 77, 109, 0.3); 
-                }
-                .status-box { 
-                    margin-top: 20px; 
-                    padding: 15px; 
-                    background: rgba(255, 255, 255, 0.05); 
-                    border-radius: 10px; 
-                    font-size: 0.9em; 
-                    color: #a3bffa; 
-                    max-height: 150px; 
-                    overflow-y: auto; 
-                    text-align: left; 
-                    border: 1px solid rgba(255, 255, 255, 0.1); 
-                }
-                .status-log { 
-                    margin-bottom: 10px; 
-                    padding: 5px; 
-                    background: rgba(255, 255, 255, 0.02); 
-                    border-radius: 5px; 
-                }
-                .status-log.new { 
-                    animation: fadeIn 1s; 
-                }
-                @keyframes fadeIn { 
-                    from { opacity: 0; transform: translateY(10px); } 
-                    to { opacity: 1; transform: translateY(0); } 
-                }
-                footer { 
-                    margin-top: 20px; 
-                    font-size: 0.9em; 
-                    color: rgba(255, 255, 255, 0.6); 
-                }
-                .bottom-button { 
-                    margin-top: 20px; 
-                }
-                @media (max-width: 480px) { 
-                    .container { padding: 20px; } 
-                    h1 { font-size: 1.8em; } 
-                    .control-btn { font-size: 1em; padding: 12px; } 
-                    .status-box { font-size: 0.8em; max-height: 120px; } 
-                }
+                body { background: #1a2535; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; color: #fff; }
+                .container { background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); border-radius: 15px; padding: 30px; width: 100%; max-width: 400px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; }
+                h1 { font-size: 2.2em; color: #ff4d6d; margin-bottom: 20px; text-shadow: 0 0 10px rgba(255, 77, 109, 0.5); }
+                .button-group { display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px; }
+                .control-btn { display: inline-block; padding: 15px; font-size: 1.1em; text-decoration: none; color: #fff; background: linear-gradient(90deg, #ff4d6d, #4a69bd); border: none; border-radius: 25px; width: 100%; cursor: pointer; transition: transform 0.3s, box-shadow 0.3s; box-shadow: 0 5px 15px rgba(255, 77, 109, 0.4); }
+                .control-btn:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(255, 77, 109, 0.6); }
+                .control-btn:active { transform: translateY(0); box-shadow: 0 3px 10px rgba(255, 77, 109, 0.3); }
+                .status-box { margin-top: 20px; padding: 15px; background: rgba(255, 255, 255, 0.05); border-radius: 10px; font-size: 0.9em; color: #a3bffa; max-height: 150px; overflow-y: auto; text-align: left; border: 1px solid rgba(255, 255, 255, 0.1); }
+                .status-log { margin-bottom: 10px; padding: 5px; background: rgba(255, 255, 255, 0.02); border-radius: 5px; }
+                .status-log.new { animation: fadeIn 1s; }
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+                footer { margin-top: 20px; font-size: 0.9em; color: rgba(255, 255, 255, 0.6); }
+                .bottom-button { margin-top: 20px; }
+                @media (max-width: 480px) { .container { padding: 20px; } h1 { font-size: 1.8em; } .control-btn { font-size: 1em; padding: 12px; } .status-box { font-size: 0.8em; max-height: 120px; } }
             </style>
         </head>
         <body>
@@ -429,7 +374,7 @@ def index():
                     {% endfor %}
                 </div>
                 <div class="bottom-button">
-                    <a href="{{ map_redirect_url }}" class="control_setup.pybtn">Open Latest Map</a>
+                    <a href="{{ map_redirect_url }}" class="control-btn">Open Latest Map</a>
                 </div>
                 <footer>2025</footer>
             </div>
@@ -482,6 +427,8 @@ def index():
         </html>
     """, start_url=start_url, stop_url=stop_url, location_url=location_url, map_redirect_url=map_redirect_url, server_logs=server_logs)
 
+from flask import send_file  # Import send_file for serving the image
+
 initial_logs = server_logs.copy()
 def run_flask():
     app.run(host='0.0.0.0', port=5000, debug=False)
@@ -500,7 +447,7 @@ try:
 
     while True:
         start_vehicle_with_face()
-        sleep(5)  # Wait before attempting another recognition (adjust as needed)
+        sleep(5)
 
 except KeyboardInterrupt:
     print("Program stopped by user.")
