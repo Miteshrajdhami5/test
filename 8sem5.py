@@ -59,6 +59,7 @@ if not camera.isOpened():
 
 # Function to capture an image from the camera and check for a face
 def capture_image_with_face():
+    global last_log_time
     while True:
         ret, frame = camera.read()
         if not ret:
@@ -78,12 +79,12 @@ def capture_image_with_face():
             if (current_time - last_log_time).total_seconds() > 1:
                 new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, waiting for a clear face"
                 server_logs.append(new_log)
-                global last_log_time
                 last_log_time = current_time
             sleep(0.5)  # Wait before retrying
 
 # Function to compare faces
 def compare_faces(captured_image_path):
+    global last_log_time
     try:
         captured_image = face_recognition.load_image_file(captured_image_path)
         captured_encodings = face_recognition.face_encodings(captured_image)
@@ -268,14 +269,14 @@ def stream_logs():
 # Flask Routes
 @app.route('/stop_vehicle', methods=['GET'])
 def stop_motor_web():
-    global server_logs
+    global server_logs, last_log_time
     print("Stopping Vehicle via web...")
     stop_motor()
     return jsonify({"logs": server_logs})
 
 @app.route('/start_vehicle', methods=['GET'])
 def start_motor_web():
-    global server_logs
+    global server_logs, last_log_time
     print("Starting vehicle via web...")
     threading.Thread(target=start_vehicle_with_face).start()
     sleep(2)
@@ -283,7 +284,7 @@ def start_motor_web():
 
 @app.route('/send_location', methods=['GET'])
 def send_location_web():
-    global server_logs
+    global server_logs, last_log_time
     print("Fetching GPS location...")
     location = get_location()
     return jsonify({"logs": server_logs, "location": location})
@@ -361,7 +362,7 @@ def stream():
 
 @app.route('/')
 def index():
-    global pending_authorization
+    global pending_authorization, last_log_time
     start_url = 'http://192.168.10.86:5000/start_vehicle'
     stop_url = 'http://192.168.10.86:5000/stop_vehicle'
     location_url = 'http://192.168.10.86:5000/send_location'
@@ -481,7 +482,7 @@ try:
     while True:
         if not pending_authorization:  # Only attempt new face recognition if no authorization is pending
             start_vehicle_with_face()
-        sleep(1)  # Reduced sleep to check more frequently, but main delay is in face detection
+        sleep(1)  # Reduced sleep to check more frequently
 
 except KeyboardInterrupt:
     print("Program stopped by user.")
