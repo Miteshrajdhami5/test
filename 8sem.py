@@ -40,7 +40,7 @@ last_log_time = datetime.now()
 last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"  # Default location
 
 # Load the reference face image (you'll need to place this image on your Raspberry Pi)
-REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.jpg"  # Replace with the actual path to your image
+REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"  # Changed to .png
 if not os.path.exists(REFERENCE_IMAGE_PATH):
     print(f"Error: Reference image {REFERENCE_IMAGE_PATH} not found. Please add the image.")
     exit()
@@ -66,7 +66,7 @@ def capture_image():
         print("Error: Failed to capture image from camera")
         return None
     # Save the captured image temporarily
-    captured_image_path = "/home/mrd/Desktop/captured_face.jpg"
+    captured_image_path = "/home/mrd/Desktop/captured_face.png"  # Changed to .png
     cv2.imwrite(captured_image_path, frame)
     return captured_image_path
 
@@ -303,7 +303,7 @@ def redirect_to_map():
 
 @app.route('/stream')
 def stream():
-    return Response(stream_logs(), mimetype='text/event-stream')
+    return Response(stream_logs(), mimetype='text/event-source')
 
 @app.route('/')
 def index():
