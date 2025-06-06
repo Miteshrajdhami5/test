@@ -16,7 +16,7 @@ IN1 = OutputDevice(14)  # Connect to motor IN1
 IN2 = OutputDevice(15)  # Connect to motor IN2
 IN3 = OutputDevice(18)  # Connect to motor IN3
 IN4 = OutputDevice(23)  # Connect to motor IN4
-IR_SENSOR = InputDevice(17)  # IR sensor on GPIO 17 (adjust as needed)
+IR_SENSOR = InputDevice(17)  # IR sensor on GPIO 17
 
 # Step sequence for a 4-phase stepper motor
 step_sequence = [
@@ -40,6 +40,7 @@ server_logs = ["System Ready"]
 last_log_time = datetime.now()
 last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"  # Default location
 pending_authorization = False  # Flag to track if authorization is pending
+sms_sent_for_current_attempt = False  # Flag to prevent multiple SMS for the same attempt
 
 # Load the reference face image
 REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"
@@ -56,15 +57,30 @@ if not camera.isOpened():
     print("Error: Could not open camera")
     exit()
 
-# Function to capture an image from the camera
-def capture_image():
-    ret, frame = camera.read()
-    if not ret:
-        print("Error: Failed to capture image from camera")
-        return None
-    captured_image_path = "/home/mrd/Desktop/captured_face.png"
-    cv2.imwrite(captured_image_path, frame)
-    return captured_image_path
+# Function to capture an image from the camera and check for a face
+def capture_image_with_face():
+    while True:
+        ret, frame = camera.read()
+        if not ret:
+            print("Error: Failed to capture image from camera")
+            return None
+        # Convert frame to RGB for face_recognition
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Check if a face is present
+        face_locations = face_recognition.face_locations(rgb_frame)
+        if face_locations:  # If at least one face is detected
+            captured_image_path = "/home/mrd/Desktop/captured_face.png"
+            cv2.imwrite(captured_image_path, frame)
+            return captured_image_path
+        else:
+            print("No face detected in the frame. Waiting for a clear face...")
+            current_time = datetime.now()
+            if (current_time - last_log_time).total_seconds() > 1:
+                new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, waiting for a clear face"
+                server_logs.append(new_log)
+                global last_log_time
+                last_log_time = current_time
+            sleep(0.5)  # Wait before retrying
 
 # Function to compare faces
 def compare_faces(captured_image_path):
@@ -121,7 +137,7 @@ def stop_motor():
 
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization
+    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt
     if vehicle_stopped:
         print("Waiting for IR sensor (finger) detection...")
         current_time = datetime.now()
@@ -130,8 +146,8 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Wait for IR sensor to detect finger (simulated as active low)
-        while IR_SENSOR.value:  # Assuming IR sensor is active low (0 when finger detected)
+        # Wait for IR sensor to detect finger (active low)
+        while IR_SENSOR.value:
             sleep(0.1)
         print("IR sensor detected finger! Proceeding to face recognition...")
         current_time = datetime.now()
@@ -140,7 +156,8 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        captured_image_path = capture_image()
+        # Wait until a clear face is detected
+        captured_image_path = capture_image_with_face()
         if not captured_image_path:
             new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
             server_logs.append(new_log)
@@ -158,6 +175,7 @@ def start_vehicle_with_face():
             threading.Thread(target=step_motor_continuous, args=(100,)).start()
             vehicle_stopped = False
             send_sms()
+            sms_sent_for_current_attempt = False  # Reset SMS flag
         else:
             print("No face match found. Requesting authorization...")
             current_time = datetime.now()
@@ -165,7 +183,9 @@ def start_vehicle_with_face():
                 new_log = f"{current_time.strftime('%H:%M:%S')} - No face match found. Requesting authorization..."
                 server_logs.append(new_log)
                 last_log_time = current_time
-            send_image_to_owner(captured_image_path)
+            if not sms_sent_for_current_attempt:  # Send SMS only once per attempt
+                send_image_to_owner(captured_image_path)
+                sms_sent_for_current_attempt = True
             pending_authorization = True
 
 # Function to send SMS with links
@@ -275,7 +295,7 @@ def redirect_to_map():
 
 @app.route('/authorize', methods=['GET', 'POST'])
 def authorize():
-    global server_logs, last_log_time, pending_authorization, vehicle_stopped
+    global server_logs, last_log_time, pending_authorization, vehicle_stopped, sms_sent_for_current_attempt
     current_time = datetime.now()
     if request.method == 'POST':
         action = request.form.get('action')
@@ -289,6 +309,7 @@ def authorize():
             vehicle_stopped = False
             send_sms()
             pending_authorization = False
+            sms_sent_for_current_attempt = False  # Reset SMS flag
         elif action == 'no':
             print("Owner denied access via web.")
             if (current_time - last_log_time).total_seconds() > 1:
@@ -296,6 +317,7 @@ def authorize():
                 server_logs.append(new_log)
                 last_log_time = current_time
             pending_authorization = False
+            sms_sent_for_current_attempt = False  # Reset SMS flag
         return redirect('/')
     elif pending_authorization:
         captured_image_path = "/home/mrd/Desktop/captured_face.png"
@@ -457,8 +479,9 @@ try:
         last_log_time = current_time
 
     while True:
-        start_vehicle_with_face()
-        sleep(5)
+        if not pending_authorization:  # Only attempt new face recognition if no authorization is pending
+            start_vehicle_with_face()
+        sleep(1)  # Reduced sleep to check more frequently, but main delay is in face detection
 
 except KeyboardInterrupt:
     print("Program stopped by user.")
