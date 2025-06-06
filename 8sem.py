@@ -1,6 +1,6 @@
 import requests
 import serial
-from gpiozero import OutputDevice
+from gpiozero import OutputDevice, InputDevice
 from time import sleep
 from flask import Flask, render_template_string, Response, jsonify, redirect, request
 import threading
@@ -16,6 +16,7 @@ IN1 = OutputDevice(14)  # Connect to motor IN1
 IN2 = OutputDevice(15)  # Connect to motor IN2
 IN3 = OutputDevice(18)  # Connect to motor IN3
 IN4 = OutputDevice(23)  # Connect to motor IN4
+IR_SENSOR = InputDevice(17)  # IR sensor on GPIO 17 (adjust as needed)
 
 # Step sequence for a 4-phase stepper motor
 step_sequence = [
@@ -34,7 +35,7 @@ app = Flask(__name__)
 
 # Global variables to track motor state, server logs, and last GPS location
 motor_running = False
-vehicle_stopped = False
+vehicle_stopped = True
 server_logs = ["System Ready"]
 last_log_time = datetime.now()
 last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"  # Default location
@@ -118,14 +119,24 @@ def stop_motor():
         last_log_time = current_time
     print("Vehicle stopped!")
 
-# Function to start the motor with face recognition
+# Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
     global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization
     if vehicle_stopped:
-        print("Capturing image for face recognition...")
+        print("Waiting for IR sensor (finger) detection...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
-            new_log = f"{current_time.strftime('%H:%M:%S')} - Capturing image for face recognition"
+            new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for IR sensor detection"
+            server_logs.append(new_log)
+            last_log_time = current_time
+
+        # Wait for IR sensor to detect finger (simulated as active low)
+        while IR_SENSOR.value:  # Assuming IR sensor is active low (0 when finger detected)
+            sleep(0.1)
+        print("IR sensor detected finger! Proceeding to face recognition...")
+        current_time = datetime.now()
+        if (current_time - last_log_time).total_seconds() > 1:
+            new_log = f"{current_time.strftime('%H:%M:%S')} - IR sensor detected finger, starting face recognition"
             server_logs.append(new_log)
             last_log_time = current_time
 
@@ -148,14 +159,14 @@ def start_vehicle_with_face():
             vehicle_stopped = False
             send_sms()
         else:
-            print("No face match found. Checking for unauthorized access...")
+            print("No face match found. Requesting authorization...")
             current_time = datetime.now()
             if (current_time - last_log_time).total_seconds() > 1:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - No face match found. Checking for unauthorized access..."
+                new_log = f"{current_time.strftime('%H:%M:%S')} - No face match found. Requesting authorization..."
                 server_logs.append(new_log)
                 last_log_time = current_time
             send_image_to_owner(captured_image_path)
-            pending_authorization = True  # Set flag to show authorization page
+            pending_authorization = True
 
 # Function to send SMS with links
 def send_sms():
@@ -181,7 +192,7 @@ def send_sms():
     else:
         print(f"Failed to send SMS: {r.text}")
 
-# Function to send SMS with image link (simulated)
+# Function to send SMS with image link
 def send_image_to_owner(captured_image_path):
     global server_logs, last_log_time
     current_time = datetime.now()
@@ -438,10 +449,10 @@ flask_thread.daemon = True
 flask_thread.start()
 
 try:
-    print("Waiting for face recognition to start the vehicle...")
+    print("Waiting for IR sensor and face recognition to start the vehicle...")
     current_time = datetime.now()
     if (current_time - last_log_time).total_seconds() > 1:
-        new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for face recognition..."
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for IR sensor and face recognition..."
         server_logs.append(new_log)
         last_log_time = current_time
 
