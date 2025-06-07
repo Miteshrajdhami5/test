@@ -10,7 +10,7 @@ import cv2
 import face_recognition
 import numpy as np
 import os
-import certifi  # Added for TLS certificate bundle
+import certifi
 
 # Pin Definitions
 IN1 = OutputDevice(14)  # Connect to motor IN1
@@ -34,14 +34,15 @@ step_sequence = [
 # Initialize Flask web server
 app = Flask(__name__)
 
-# Global variables to track motor state, server logs, and last GPS location
+# Global variables
 motor_running = False
 vehicle_stopped = True
 server_logs = ["System Ready"]
 last_log_time = datetime.now()
-last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"  # Default location
-pending_authorization = False  # Flag to track if authorization is pending
-sms_sent_for_current_attempt = False  # Flag to prevent multiple SMS for the same attempt
+last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"
+pending_authorization = False
+sms_sent_for_current_attempt = False
+camera_lock = threading.Lock()
 
 # Load the reference face image
 REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"
@@ -61,55 +62,57 @@ if not camera.isOpened():
 # Function to reinitialize camera
 def reinitialize_camera():
     global camera
-    camera.release()
-    camera = cv2.VideoCapture(0)
-    if not camera.isOpened():
-        print("Error: Failed to reinitialize camera")
+    with camera_lock:
+        camera.release()
+        for i in range(3):
+            camera = cv2.VideoCapture(i)
+            if camera.isOpened():
+                print(f"Camera reinitialized successfully on index {i}")
+                return True
+        print("Error: Failed to reinitialize camera on any index")
         return False
-    return True
 
 # Function to capture an image from the camera and check for a face
 def capture_image_with_face():
     global last_log_time, camera
     max_retries = 3
     retry_count = 0
-    while retry_count < max_retries:
-        if not camera.isOpened():
-            if not reinitialize_camera():
-                return None
-        ret, frame = camera.read()
-        if not ret:
-            print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries})")
-            retry_count += 1
-            sleep(1)  # Wait before retrying
-            continue
-        # Convert to grayscale for brightness check
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        mean_brightness = np.mean(gray_frame)
-        if mean_brightness < 30:  # Adjust threshold as needed
-            print("Image too dark. Waiting for better lighting...")
-            current_time = datetime.now()
-            if (current_time - last_log_time).total_seconds() > 1:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - Image too dark, waiting for better lighting"
-                server_logs.append(new_log)
-                last_log_time = current_time
-            sleep(0.5)
-            continue
-        # Check for face
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_locations = face_recognition.face_locations(rgb_frame)
-        if face_locations:
-            captured_image_path = "/home/mrd/Desktop/captured_face.png"
-            cv2.imwrite(captured_image_path, frame)
-            return captured_image_path
-        else:
-            print("No face detected in the frame. Waiting for a clear face...")
-            current_time = datetime.now()
-            if (current_time - last_log_time).total_seconds() > 1:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, waiting for a clear face"
-                server_logs.append(new_log)
-                last_log_time = current_time
-            sleep(0.5)
+    with camera_lock:
+        while retry_count < max_retries:
+            if not camera.isOpened():
+                if not reinitialize_camera():
+                    return None
+            ret, frame = camera.read()
+            if not ret or frame is None or frame.size == 0:
+                print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries}) - Frame invalid or empty")
+                retry_count += 1
+                sleep(1)
+                continue
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            mean_brightness = np.mean(gray_frame)
+            if mean_brightness < 30:
+                print("Image too dark. Waiting for better lighting...")
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Image too dark, waiting for better lighting"
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+                sleep(0.5)
+                continue
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_frame)
+            if face_locations:
+                captured_image_path = "/home/mrd/Desktop/captured_face.png"
+                cv2.imwrite(captured_image_path, frame)
+                return captured_image_path
+            else:
+                print("No face detected in the frame. Waiting for a clear face...")
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, waiting for a clear face"
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+                sleep(0.5)
     print("Max retries reached. Camera capture failed.")
     return None
 
@@ -162,7 +165,7 @@ def step_motor_continuous(delay=0.1):
 
 # Function to stop the motor
 def stop_motor():
-    global motor_running, vehicle_stopped, server_logs, last_log_time
+    global motor_running, vehicle_stopped, server_logs, last_log_time, camera
     motor_running = False
     vehicle_stopped = True
     set_step(0, 0, 0, 0)
@@ -172,6 +175,9 @@ def stop_motor():
         server_logs.append(new_log)
         last_log_time = current_time
     print("Vehicle stopped!")
+    with camera_lock:
+        if not reinitialize_camera():
+            print("Warning: Camera reinitialization failed after stop")
 
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
@@ -184,7 +190,6 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Wait for IR sensor to detect finger (active low)
         while IR_SENSOR.value:
             sleep(0.1)
         print("IR sensor detected finger! Proceeding to face recognition...")
@@ -194,7 +199,6 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Wait until a clear face is detected
         captured_image_path = capture_image_with_face()
         if not captured_image_path:
             new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
@@ -213,7 +217,7 @@ def start_vehicle_with_face():
             threading.Thread(target=step_motor_continuous, args=(100,)).start()
             vehicle_stopped = False
             send_sms()
-            sms_sent_for_current_attempt = False  # Reset SMS flag
+            sms_sent_for_current_attempt = False
         else:
             print("No face match found. Requesting authorization...")
             current_time = datetime.now()
@@ -221,14 +225,14 @@ def start_vehicle_with_face():
                 new_log = f"{current_time.strftime('%H:%M:%S')} - No face match found. Requesting authorization..."
                 server_logs.append(new_log)
                 last_log_time = current_time
-            if not sms_sent_for_current_attempt:  # Send SMS only once per attempt
+            if not sms_sent_for_current_attempt:
                 send_image_to_owner(captured_image_path)
                 sms_sent_for_current_attempt = True
             pending_authorization = True
 
 # Function to send SMS with links
 def send_sms():
-    website_url = 'http://192.168.10.86:5000'
+    website_url = 'http://192.168.10.71:5000'
     message = f"""
     🚗 Vehicle Start Detected!!!
 
@@ -264,7 +268,7 @@ def send_image_to_owner(captured_image_path):
 
     An unknown person tried to start the vehicle.
     Image: {image_link}
-    Check authorization on: http://192.168.10.86:5000
+    Check authorization on: http://192.168.10.71:5000
     """
     try:
         r = requests.post(
@@ -307,7 +311,7 @@ def get_location():
 # SSE Route for real-time updates
 def stream_logs():
     global server_logs, initial_logs
-    initial_logs = server_logs.copy()  # Initialize here to ensure it’s set
+    initial_logs = server_logs.copy()
     yield f"data: {json.dumps({'logs': server_logs})}\n\n"
     while True:
         sleep(0.1)
@@ -359,7 +363,7 @@ def authorize():
             vehicle_stopped = False
             send_sms()
             pending_authorization = False
-            sms_sent_for_current_attempt = False  # Reset SMS flag
+            sms_sent_for_current_attempt = False
         elif action == 'no':
             print("Owner denied access via web.")
             if (current_time - last_log_time).total_seconds() > 1:
@@ -367,7 +371,7 @@ def authorize():
                 server_logs.append(new_log)
                 last_log_time = current_time
             pending_authorization = False
-            sms_sent_for_current_attempt = False  # Reset SMS flag
+            sms_sent_for_current_attempt = False
         return redirect('/')
     elif pending_authorization:
         captured_image_path = "/home/mrd/Desktop/captured_face.png"
@@ -412,10 +416,10 @@ def stream():
 @app.route('/')
 def index():
     global pending_authorization, last_log_time
-    start_url = 'http://192.168.10.86:5000/start_vehicle'
-    stop_url = 'http://192.168.10.86:5000/stop_vehicle'
-    location_url = 'http://192.168.10.86:5000/send_location'
-    map_redirect_url = 'http://192.168.10.86:5000/redirect_to_map'
+    start_url = 'http://192.168.10.71:5000/start_vehicle'
+    stop_url = 'http://192.168.10.71:5000/stop_vehicle'
+    location_url = 'http://192.168.10.71:5000/send_location'
+    map_redirect_url = 'http://192.168.10.71:5000/redirect_to_map'
     if pending_authorization:
         return redirect('/authorize')
     return render_template_string("""
@@ -510,7 +514,7 @@ def index():
         </html>
     """, start_url=start_url, stop_url=stop_url, location_url=location_url, map_redirect_url=map_redirect_url, server_logs=server_logs)
 
-from flask import send_file  # Import send_file for serving the image
+from flask import send_file
 
 initial_logs = server_logs.copy()
 def run_flask():
@@ -540,9 +544,15 @@ try:
                     server_logs.append(new_log)
                     last_log_time = current_time
         sleep(1)
-except KeyboardInterrupt:
-    print("Program stopped by user.")
+except Exception as e:
+    print(f"Main loop crashed: {e}")
+    current_time = datetime.now()
+    if (current_time - last_log_time).total_seconds() > 1:
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Main loop crashed: {e}"
+        server_logs.append(new_log)
+        last_log_time = current_time
 finally:
     print("Cleaning up...")
     stop_motor()
-    camera.release()
+    with camera_lock:
+        camera.release()
