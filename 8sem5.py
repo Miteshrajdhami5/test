@@ -55,17 +55,34 @@ reference_encoding = face_recognition.face_encodings(reference_image)[0]
 # Initialize the camera
 camera = cv2.VideoCapture(0)
 if not camera.isOpened():
-    print("Error: Could not open camera")
+    print("Error: Could not open camera initially")
     exit()
+
+# Function to reinitialize camera
+def reinitialize_camera():
+    global camera
+    camera.release()
+    camera = cv2.VideoCapture(0)
+    if not camera.isOpened():
+        print("Error: Failed to reinitialize camera")
+        return False
+    return True
 
 # Function to capture an image from the camera and check for a face
 def capture_image_with_face():
-    global last_log_time
-    while True:
+    global last_log_time, camera
+    max_retries = 3
+    retry_count = 0
+    while retry_count < max_retries:
+        if not camera.isOpened():
+            if not reinitialize_camera():
+                return None
         ret, frame = camera.read()
         if not ret:
-            print("Error: Failed to capture image from camera")
-            return None
+            print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries})")
+            retry_count += 1
+            sleep(1)  # Wait before retrying
+            continue
         # Convert to grayscale for brightness check
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         mean_brightness = np.mean(gray_frame)
@@ -93,6 +110,8 @@ def capture_image_with_face():
                 server_logs.append(new_log)
                 last_log_time = current_time
             sleep(0.5)
+    print("Max retries reached. Camera capture failed.")
+    return None
 
 # Function to compare faces
 def compare_faces(captured_image_path):
