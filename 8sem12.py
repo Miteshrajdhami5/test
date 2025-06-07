@@ -182,7 +182,7 @@ def stop_motor():
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
     global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt
-    if vehicle_stopped:
+    while vehicle_stopped:  # Keep checking while vehicle is stopped
         print("Waiting for IR sensor (finger) detection...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
@@ -199,19 +199,23 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Reset state to ensure fresh face detection loop
+        # Force repeated face detection attempts
         captured_image_path = None
-        while not captured_image_path and vehicle_stopped:
+        max_attempts = 10  # Limit the number of attempts to avoid infinite loop
+        attempt_count = 0
+        while not captured_image_path and attempt_count < max_attempts and vehicle_stopped:
             captured_image_path = capture_image_with_face()
             if not captured_image_path:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
-                server_logs.append(new_log)
-                last_log_time = current_time
-                sleep(1)  # Brief pause before retrying
-            else:
-                break
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image, retrying..."
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+                sleep(1)  # Pause before retrying
+            attempt_count += 1
 
         if not captured_image_path:
+            print("Max attempts reached or vehicle state changed. Aborting face recognition.")
             return
 
         match_found = compare_faces(captured_image_path)
