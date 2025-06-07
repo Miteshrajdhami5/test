@@ -47,6 +47,7 @@ sms_sent_for_current_attempt = False
 camera_lock = threading.Lock()
 latest_captured_image = None  # New global to track the latest captured image
 last_detection_time = datetime.min  # To prevent repeated detections
+sms_send_count = 0  # Debug counter for SMS sends
 
 # Load the reference face image
 REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"
@@ -82,12 +83,12 @@ def capture_image_with_face():
     max_retries = 3
     retry_count = 0
     with camera_lock:
+        # Reinitialize camera for a fresh start
+        if not reinitialize_camera():
+            return None
         while retry_count < max_retries:
-            if not camera.isOpened():
-                if not reinitialize_camera():
-                    return None
             # Flush buffer and get a fresh frame
-            for _ in range(3):  # Read and discard 3 frames to get the latest
+            for _ in range(3):  # Read and discard 3 frames
                 camera.grab()
                 sleep(0.1)
             ret, frame = camera.read()
@@ -110,13 +111,12 @@ def capture_image_with_face():
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             face_locations = face_recognition.face_locations(rgb_frame)
             if face_locations:
-                # Generate a unique filename using timestamp
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 captured_image_path = f"/home/mrd/Desktop/captured_face_{timestamp}.png"
                 success = cv2.imwrite(captured_image_path, frame)
                 if success:
                     print(f"Image saved successfully to {captured_image_path}")
-                    latest_captured_image = captured_image_path  # Update the latest image path
+                    latest_captured_image = captured_image_path
                     return captured_image_path
                 else:
                     print(f"Failed to save image to {captured_image_path}")
@@ -197,10 +197,10 @@ def stop_motor():
 
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt, last_detection_time
+    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt, last_detection_time, sms_send_count
     current_time = datetime.now()
-    # Prevent repeated detections within 5 seconds
-    if (current_time - last_detection_time).total_seconds() < 5:
+    # Prevent repeated detections within 10 seconds
+    if (current_time - last_detection_time).total_seconds() < 10:
         return
 
     if vehicle_stopped:
@@ -214,7 +214,7 @@ def start_vehicle_with_face():
         # Debounce IR sensor
         start_time = datetime.now()
         while IR_SENSOR.value:
-            if (datetime.now() - start_time).total_seconds() > 2:  # 2-second debounce
+            if (datetime.now() - start_time).total_seconds() > 2:
                 return
             sleep(0.1)
         print("IR sensor detected finger! Proceeding to face recognition...")
@@ -259,7 +259,8 @@ def start_vehicle_with_face():
                 server_logs.append(new_log)
                 last_log_time = current_time
             if not sms_sent_for_current_attempt:
-                print(f"Sending SMS with image: {captured_image_path}")  # Debug print
+                sms_send_count += 1
+                print(f"Sending SMS with image: {captured_image_path} (Attempt {sms_send_count})")
                 send_image_to_owner(captured_image_path)
                 sms_sent_for_current_attempt = True
                 last_detection_time = current_time
