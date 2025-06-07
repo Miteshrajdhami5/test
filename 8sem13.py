@@ -45,8 +45,8 @@ last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"
 pending_authorization = False
 sms_sent_for_current_attempt = False
 camera_lock = threading.Lock()
-latest_captured_image = None  # New global to track the latest captured image
-last_detection_time = datetime.min  # To prevent repeated detections
+latest_captured_image = None  # Track the latest captured image
+last_detection_time = datetime.min  # Prevent rapid detections
 sms_send_count = 0  # Debug counter for SMS sends
 
 # Load the reference face image
@@ -80,23 +80,24 @@ def reinitialize_camera():
 # Function to capture an image from the camera and check for a face
 def capture_image_with_face():
     global last_log_time, camera, latest_captured_image
-    max_retries = 3
+    max_retries = 5  # Increased retries for reliability
     retry_count = 0
     with camera_lock:
-        # Reinitialize camera for a fresh start
+        # Reinitialize camera to ensure a fresh state
         if not reinitialize_camera():
             return None
         while retry_count < max_retries:
-            # Flush buffer and get a fresh frame
-            for _ in range(3):  # Read and discard 3 frames
+            # Flush buffer with multiple grabs
+            for _ in range(5):  # Increased to 5 grabs for better buffer flush
                 camera.grab()
-                sleep(0.1)
+                sleep(0.2)  # Longer delay to allow camera to settle
             ret, frame = camera.read()
             if not ret or frame is None or frame.size == 0:
-                print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries}) - Frame invalid or empty")
+                print(f"Error: Failed to capture image (Retry {retry_count + 1}/{max_retries}) - Frame invalid or empty")
                 retry_count += 1
                 sleep(1)
                 continue
+            # Check brightness
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             mean_brightness = np.mean(gray_frame)
             if mean_brightness < 30:
@@ -106,8 +107,9 @@ def capture_image_with_face():
                     new_log = f"{current_time.strftime('%H:%M:%S')} - Image too dark, waiting for better lighting"
                     server_logs.append(new_log)
                     last_log_time = current_time
-                sleep(0.5)
+                sleep(1)  # Longer wait for lighting adjustment
                 continue
+            # Check for face
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             face_locations = face_recognition.face_locations(rgb_frame)
             if face_locations:
@@ -122,13 +124,14 @@ def capture_image_with_face():
                     print(f"Failed to save image to {captured_image_path}")
                     return None
             else:
-                print("No face detected in the frame. Waiting for a clear face...")
+                print("No face detected in the frame. Retrying...")
                 current_time = datetime.now()
                 if (current_time - last_log_time).total_seconds() > 1:
-                    new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, waiting for a clear face"
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, retrying"
                     server_logs.append(new_log)
                     last_log_time = current_time
-                sleep(0.5)
+                retry_count += 1
+                sleep(1)
     print("Max retries reached. Camera capture failed.")
     return None
 
@@ -197,10 +200,12 @@ def stop_motor():
 
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt, last_detection_time, sms_send_count
+    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, 
+           sms_sent_for_current_attempt, last_detection_time, sms_send_count
     current_time = datetime.now()
     # Prevent repeated detections within 10 seconds
     if (current_time - last_detection_time).total_seconds() < 10:
+        print(f"Cooldown active, last detection at {last_detection_time.strftime('%H:%M:%S')}")
         return
 
     if vehicle_stopped:
@@ -215,29 +220,23 @@ def start_vehicle_with_face():
         start_time = datetime.now()
         while IR_SENSOR.value:
             if (datetime.now() - start_time).total_seconds() > 2:
+                print("Debounce timeout, ignoring detection")
                 return
             sleep(0.1)
-        print("IR sensor detected finger! Proceeding to face recognition...")
+        print("IR sensor detected finger! Initiating face recognition...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
             new_log = f"{current_time.strftime('%H:%M:%S')} - IR sensor detected finger, starting face recognition"
             server_logs.append(new_log)
             last_log_time = current_time
 
-        captured_image_path = None
-        while not captured_image_path and vehicle_stopped:
-            captured_image_path = capture_image_with_face()
-            if not captured_image_path:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
-                server_logs.append(new_log)
-                last_log_time = current_time
-                sleep(1)
-            else:
-                break
-
+        # Capture a new image for this detection
+        captured_image_path = capture_image_with_face()
         if not captured_image_path:
+            print("Failed to capture a valid image, aborting process")
             return
 
+        # Compare faces
         match_found = compare_faces(captured_image_path)
         if match_found:
             print("Face match found! Starting vehicle...")
