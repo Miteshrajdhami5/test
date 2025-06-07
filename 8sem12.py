@@ -182,7 +182,7 @@ def stop_motor():
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
     global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt
-    while vehicle_stopped:  # Keep checking while vehicle is stopped
+    while vehicle_stopped:  # Keep looping while vehicle is stopped
         print("Waiting for IR sensor (finger) detection...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
@@ -190,8 +190,12 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        while IR_SENSOR.value:
+        # Wait for IR sensor to be triggered
+        while IR_SENSOR.value and vehicle_stopped:
             sleep(0.1)
+        if not vehicle_stopped:  # Exit if vehicle state changes (e.g., authorized)
+            return
+
         print("IR sensor detected finger! Proceeding to face recognition...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
@@ -199,9 +203,9 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Force repeated face detection attempts
+        # Repeated face detection attempts
         captured_image_path = None
-        max_attempts = 10  # Limit the number of attempts to avoid infinite loop
+        max_attempts = 10  # Limit attempts to match your desired behavior
         attempt_count = 0
         while not captured_image_path and attempt_count < max_attempts and vehicle_stopped:
             captured_image_path = capture_image_with_face()
@@ -211,7 +215,7 @@ def start_vehicle_with_face():
                     new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image, retrying..."
                     server_logs.append(new_log)
                     last_log_time = current_time
-                sleep(1)  # Pause before retrying
+                sleep(1)  # Pause to allow repositioning or lighting adjustment
             attempt_count += 1
 
         if not captured_image_path:
@@ -545,7 +549,7 @@ try:
         last_log_time = current_time
 
     while True:
-        if not pending_authorization:
+        if vehicle_stopped and not pending_authorization:
             try:
                 start_vehicle_with_face()
             except Exception as e:
