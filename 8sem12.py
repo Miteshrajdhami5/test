@@ -45,6 +45,7 @@ last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"
 pending_authorization = False
 sms_sent_for_current_attempt = False
 camera_lock = threading.Lock()
+latest_captured_image = None  # New global to track the latest captured image
 
 # Load the reference face image
 REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"
@@ -76,7 +77,7 @@ def reinitialize_camera():
 
 # Function to capture an image from the camera and check for a face
 def capture_image_with_face():
-    global last_log_time, camera
+    global last_log_time, camera, latest_captured_image
     max_retries = 3
     retry_count = 0
     with camera_lock:
@@ -84,6 +85,8 @@ def capture_image_with_face():
             if not camera.isOpened():
                 if not reinitialize_camera():
                     return None
+            # Force a new frame by reading and discarding the previous one
+            camera.grab()
             ret, frame = camera.read()
             if not ret or frame is None or frame.size == 0:
                 print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries}) - Frame invalid or empty")
@@ -107,8 +110,14 @@ def capture_image_with_face():
                 # Generate a unique filename using timestamp
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 captured_image_path = f"/home/mrd/Desktop/captured_face_{timestamp}.png"
-                cv2.imwrite(captured_image_path, frame)
-                return captured_image_path
+                success = cv2.imwrite(captured_image_path, frame)
+                if success:
+                    print(f"Image saved successfully to {captured_image_path}")
+                    latest_captured_image = captured_image_path  # Update the latest image path
+                    return captured_image_path
+                else:
+                    print(f"Failed to save image to {captured_image_path}")
+                    return None
             else:
                 print("No face detected in the frame. Waiting for a clear face...")
                 current_time = datetime.now()
@@ -361,7 +370,7 @@ def redirect_to_map():
 
 @app.route('/authorize', methods=['GET', 'POST'])
 def authorize():
-    global server_logs, last_log_time, pending_authorization, vehicle_stopped, sms_sent_for_current_attempt
+    global server_logs, last_log_time, pending_authorization, vehicle_stopped, sms_sent_for_current_attempt, latest_captured_image
     current_time = datetime.now()
     if request.method == 'POST':
         action = request.form.get('action')
@@ -386,7 +395,7 @@ def authorize():
             sms_sent_for_current_attempt = False
         return redirect('/')
     elif pending_authorization:
-        captured_image_path = "/home/mrd/Desktop/captured_face.png"
+        captured_image_path = latest_captured_image if latest_captured_image else "/home/mrd/Desktop/captured_face.png"
         return render_template_string("""
             <!DOCTYPE html>
             <html lang="en">
@@ -419,7 +428,8 @@ def authorize():
 
 @app.route('/captured_image')
 def captured_image():
-    return send_file("/home/mrd/Desktop/captured_face.png", mimetype='image/png')
+    global latest_captured_image
+    return send_file(latest_captured_image if latest_captured_image else "/home/mrd/Desktop/captured_face.png", mimetype='image/png')
 
 @app.route('/stream')
 def stream():
@@ -448,7 +458,7 @@ def index():
                 h1 { font-size: 2.2em; color: #ff4d6d; margin-bottom: 20px; text-shadow: 0 0 10px rgba(255, 77, 109, 0.5); }
                 .button-group { display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px; }
                 .control-btn { display: inline-block; padding: 15px; font-size: 1.1em; text-decoration: none; color: #fff; background: linear-gradient(90deg, #ff4d6d, #4a69bd); border: none; border-radius: 25px; width: 100%; cursor: pointer; transition: transform 0.3s, box-shadow 0.3s; box-shadow: 0 5px 15px rgba(255, 77, 109, 0.4); }
-                .control-btn:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(255, 77, , 109, 0.6); }
+                .control-btn:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(255, 77, 109, 0.6); }
                 .control-btn:active { transform: translateY(0); box-shadow: 0 3px 10px rgba(255, 77, 109, 0.3); }
                 .status-box { margin-top: 20px; padding: 15px; background: rgba(255, 255, 255, 0.05); border-radius: 10px; font-size: 0.9em; color: #a3bffa; max-height: 150px; overflow-y: auto; text-align: left; border: 1px solid rgba(255, 255, 255, 0.1); }
                 .status-log { margin-bottom: 10px; padding: 5px; background: rgba(255, 255, 255, 0.02); border-radius: 5px; }
