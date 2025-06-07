@@ -203,10 +203,11 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Repeated face detection attempts
+        # Force repeated face detection attempts
         captured_image_path = None
         max_attempts = 10  # Limit attempts to match your desired behavior
         attempt_count = 0
+        print("Entering face detection loop...")  # Debug print
         while not captured_image_path and attempt_count < max_attempts and vehicle_stopped:
             captured_image_path = capture_image_with_face()
             if not captured_image_path:
@@ -217,6 +218,7 @@ def start_vehicle_with_face():
                     last_log_time = current_time
                 sleep(1)  # Pause to allow repositioning or lighting adjustment
             attempt_count += 1
+        print(f"Face detection loop exited after {attempt_count} attempts")  # Debug print
 
         if not captured_image_path:
             print("Max attempts reached or vehicle state changed. Aborting face recognition.")
