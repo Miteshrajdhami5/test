@@ -86,9 +86,13 @@ def capture_image_with_face():
             if not camera.isOpened():
                 if not reinitialize_camera():
                     return None
-            # Force a new frame by reading and discarding the previous one
+            # Flush buffer and get a fresh frame
             camera.grab()
-            ret, frame = camera.read()
+            sleep(0.1)  # Small delay to ensure new frame
+            for _ in range(2):  # Read multiple frames to get the latest
+                ret, frame = camera.read()
+                if not ret or frame is None or frame.size == 0:
+                    break
             if not ret or frame is None or frame.size == 0:
                 print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries}) - Frame invalid or empty")
                 retry_count += 1
@@ -197,8 +201,8 @@ def stop_motor():
 def start_vehicle_with_face():
     global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt, last_detection_time
     current_time = datetime.now()
-    # Prevent repeated detections within a short time (e.g., 5 seconds)
-    if (current_time - last_detection_time).total_seconds() < 5 and not vehicle_stopped:
+    # Prevent repeated detections within 5 seconds
+    if (current_time - last_detection_time).total_seconds() < 5:
         return
 
     if vehicle_stopped:
@@ -209,7 +213,11 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
+        # Debounce IR sensor
+        start_time = datetime.now()
         while IR_SENSOR.value:
+            if (datetime.now() - start_time).total_seconds() > 2:  # 2-second debounce
+                return
             sleep(0.1)
         print("IR sensor detected finger! Proceeding to face recognition...")
         current_time = datetime.now()
