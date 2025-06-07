@@ -10,6 +10,7 @@ import cv2
 import face_recognition
 import numpy as np
 import os
+import certifi  # Added for TLS certificate bundle
 
 # Pin Definitions
 IN1 = OutputDevice(14)  # Connect to motor IN1
@@ -65,11 +66,22 @@ def capture_image_with_face():
         if not ret:
             print("Error: Failed to capture image from camera")
             return None
-        # Convert frame to RGB for face_recognition
+        # Convert to grayscale for brightness check
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        mean_brightness = np.mean(gray_frame)
+        if mean_brightness < 30:  # Adjust threshold as needed
+            print("Image too dark. Waiting for better lighting...")
+            current_time = datetime.now()
+            if (current_time - last_log_time).total_seconds() > 1:
+                new_log = f"{current_time.strftime('%H:%M:%S')} - Image too dark, waiting for better lighting"
+                server_logs.append(new_log)
+                last_log_time = current_time
+            sleep(0.5)
+            continue
+        # Check for face
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # Check if a face is present
         face_locations = face_recognition.face_locations(rgb_frame)
-        if face_locations:  # If at least one face is detected
+        if face_locations:
             captured_image_path = "/home/mrd/Desktop/captured_face.png"
             cv2.imwrite(captured_image_path, frame)
             return captured_image_path
@@ -80,12 +92,15 @@ def capture_image_with_face():
                 new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, waiting for a clear face"
                 server_logs.append(new_log)
                 last_log_time = current_time
-            sleep(0.5)  # Wait before retrying
+            sleep(0.5)
 
 # Function to compare faces
 def compare_faces(captured_image_path):
     global last_log_time
     try:
+        if not os.path.exists(captured_image_path):
+            print(f"Error: Image file {captured_image_path} not found")
+            return False
         captured_image = face_recognition.load_image_file(captured_image_path)
         captured_encodings = face_recognition.face_encodings(captured_image)
         if not captured_encodings:
@@ -94,6 +109,9 @@ def compare_faces(captured_image_path):
         captured_encoding = captured_encodings[0]
         results = face_recognition.compare_faces([reference_encoding], captured_encoding, tolerance=0.6)
         return results[0]
+    except IOError as e:
+        print(f"Error in face comparison: {e}")
+        return False
     except Exception as e:
         print(f"Error in face comparison: {e}")
         return False
@@ -200,18 +218,22 @@ def send_sms():
 
     Thank you!
     """
-    r = requests.post(
-        "https://sms.aakashsms.com/sms/v3/send/",
-        data={
-            'auth_token': 'a5a492a8f95c9a887b799021d5a447890d9d7bf1e5eeb954b38ebfa9cf76b482',
-            'to': '9818858567',
-            'text': message
-        }
-    )
-    if r.status_code == 200:
-        print("SMS sent successfully!")
-    else:
-        print(f"Failed to send SMS: {r.text}")
+    try:
+        r = requests.post(
+            "https://sms.aakashsms.com/sms/v3/send/",
+            data={
+                'auth_token': 'a5a492a8f95c9a887b799021d5a447890d9d7bf1e5eeb954b38ebfa9cf76b482',
+                'to': '9818858567',
+                'text': message
+            },
+            verify=certifi.where()
+        )
+        if r.status_code == 200:
+            print("SMS sent successfully!")
+        else:
+            print(f"Failed to send SMS: {r.text}")
+    except Exception as e:
+        print(f"Error sending SMS: {e}")
 
 # Function to send SMS with image link
 def send_image_to_owner(captured_image_path):
@@ -225,22 +247,29 @@ def send_image_to_owner(captured_image_path):
     Image: {image_link}
     Check authorization on: http://192.168.10.86:5000
     """
-    r = requests.post(
-        "https://sms.aakashsms.com/sms/v3/send/",
-        data={
-            'auth_token': 'a5a492a8f95c9a887b799021d5a447890d9d7bf1e5eeb954b38ebfa9cf76b482',
-            'to': '9818858567',
-            'text': message
-        }
-    )
-    if r.status_code == 200:
-        print("SMS with image link sent successfully!")
-        new_log = f"{current_time.strftime('%H:%M:%S')} - Unauthorized access detected, SMS sent to owner"
-        server_logs.append(new_log)
-        last_log_time = current_time
-    else:
-        print(f"Failed to send SMS: {r.text}")
-        new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to send SMS to owner"
+    try:
+        r = requests.post(
+            "https://sms.aakashsms.com/sms/v3/send/",
+            data={
+                'auth_token': 'a5a492a8f95c9a887b799021d5a447890d9d7bf1e5eeb954b38ebfa9cf76b482',
+                'to': '9818858567',
+                'text': message
+            },
+            verify=certifi.where()
+        )
+        if r.status_code == 200:
+            print("SMS with image link sent successfully!")
+            new_log = f"{current_time.strftime('%H:%M:%S')} - Unauthorized access detected, SMS sent to owner"
+            server_logs.append(new_log)
+            last_log_time = current_time
+        else:
+            print(f"Failed to send SMS: {r.text}")
+            new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to send SMS to owner"
+            server_logs.append(new_log)
+            last_log_time = current_time
+    except Exception as e:
+        print(f"Error sending SMS: {e}")
+        new_log = f"{current_time.strftime('%H:%M:%S')} - Error sending SMS: {e}"
         server_logs.append(new_log)
         last_log_time = current_time
 
@@ -481,10 +510,17 @@ try:
         last_log_time = current_time
 
     while True:
-        if not pending_authorization:  # Only attempt new face recognition if no authorization is pending
-            start_vehicle_with_face()
-        sleep(1)  # Reduced sleep to check more frequently
-
+        if not pending_authorization:
+            try:
+                start_vehicle_with_face()
+            except Exception as e:
+                print(f"Error in start_vehicle_with_face: {e}")
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Error: {e}"
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+        sleep(1)
 except KeyboardInterrupt:
     print("Program stopped by user.")
 finally:
