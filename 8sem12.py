@@ -165,7 +165,7 @@ def step_motor_continuous(delay=0.1):
 
 # Function to stop the motor
 def stop_motor():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, camera
+    global motor_running, vehicle_stopped, server_logs, last_log_time, camera, pending_authorization, sms_sent_for_current_attempt
     motor_running = False
     vehicle_stopped = True
     set_step(0, 0, 0, 0)
@@ -178,34 +178,38 @@ def stop_motor():
     with camera_lock:
         if not reinitialize_camera():
             print("Warning: Camera reinitialization failed after stop")
-    # After stopping, wait for IR sensor and attempt face recognition
-    if vehicle_stopped:
+    # After stopping, wait for IR sensor and attempt face recognition like at the beginning
+    if vehicle_stopped and not pending_authorization:
         print("Waiting for IR sensor (finger) detection after stop...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
             new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for IR sensor detection after stop"
             server_logs.append(new_log)
             last_log_time = current_time
-        while IR_SENSOR.value:
+        while IR_SENSOR.value and vehicle_stopped:
             sleep(0.1)
+        if not vehicle_stopped:
+            return
         print("IR sensor detected finger! Proceeding to face recognition...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
             new_log = f"{current_time.strftime('%H:%M:%S')} - IR sensor detected finger, starting face recognition"
             server_logs.append(new_log)
             last_log_time = current_time
-        # Capture image and perform face recognition
+        # Reset state for fresh face detection
         captured_image_path = None
-        while not captured_image_path and vehicle_stopped:
+        while not captured_image_path and vehicle_stopped and not pending_authorization:
             captured_image_path = capture_image_with_face()
             if not captured_image_path:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
-                server_logs.append(new_log)
-                last_log_time = current_time
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
+                    server_logs.append(new_log)
+                    last_log_time = current_time
                 sleep(1)  # Brief pause before retrying
             else:
                 break
-        if not captured_image_path:
+        if not captured_image_path or not vehicle_stopped:
             return
         match_found = compare_faces(captured_image_path)
         if match_found:
