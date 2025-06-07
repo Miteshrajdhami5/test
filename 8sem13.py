@@ -46,6 +46,7 @@ pending_authorization = False
 sms_sent_for_current_attempt = False
 camera_lock = threading.Lock()
 latest_captured_image = None  # New global to track the latest captured image
+last_detection_time = datetime.min  # To prevent repeated detections
 
 # Load the reference face image
 REFERENCE_IMAGE_PATH = "/home/mrd/Desktop/owner_face.png"
@@ -194,7 +195,12 @@ def stop_motor():
 
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt
+    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt, last_detection_time
+    current_time = datetime.now()
+    # Prevent repeated detections within a short time (e.g., 5 seconds)
+    if (current_time - last_detection_time).total_seconds() < 5 and not vehicle_stopped:
+        return
+
     if vehicle_stopped:
         print("Waiting for IR sensor (finger) detection...")
         current_time = datetime.now()
@@ -239,6 +245,7 @@ def start_vehicle_with_face():
             vehicle_stopped = False
             send_sms()
             sms_sent_for_current_attempt = False
+            last_detection_time = current_time
         else:
             print("No face match found. Requesting authorization...")
             current_time = datetime.now()
@@ -249,6 +256,7 @@ def start_vehicle_with_face():
             if not sms_sent_for_current_attempt:
                 send_image_to_owner(captured_image_path)
                 sms_sent_for_current_attempt = True
+                last_detection_time = current_time
             pending_authorization = True
 
 # Function to send SMS with links
@@ -565,7 +573,7 @@ try:
                     new_log = f"{current_time.strftime('%H:%M:%S')} - Error: {e}"
                     server_logs.append(new_log)
                     last_log_time = current_time
-        sleep(1)
+        sleep(1)  # Prevent tight looping
 except Exception as e:
     print(f"Main loop crashed: {e}")
     current_time = datetime.now()
