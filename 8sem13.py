@@ -87,12 +87,10 @@ def capture_image_with_face():
                 if not reinitialize_camera():
                     return None
             # Flush buffer and get a fresh frame
-            camera.grab()
-            sleep(0.1)  # Small delay to ensure new frame
-            for _ in range(2):  # Read multiple frames to get the latest
-                ret, frame = camera.read()
-                if not ret or frame is None or frame.size == 0:
-                    break
+            for _ in range(3):  # Read and discard 3 frames to get the latest
+                camera.grab()
+                sleep(0.1)
+            ret, frame = camera.read()
             if not ret or frame is None or frame.size == 0:
                 print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries}) - Frame invalid or empty")
                 retry_count += 1
@@ -226,7 +224,6 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Reset state to ensure fresh face detection loop
         captured_image_path = None
         while not captured_image_path and vehicle_stopped:
             captured_image_path = capture_image_with_face()
@@ -234,7 +231,7 @@ def start_vehicle_with_face():
                 new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
                 server_logs.append(new_log)
                 last_log_time = current_time
-                sleep(1)  # Brief pause before retrying
+                sleep(1)
             else:
                 break
 
@@ -262,6 +259,7 @@ def start_vehicle_with_face():
                 server_logs.append(new_log)
                 last_log_time = current_time
             if not sms_sent_for_current_attempt:
+                print(f"Sending SMS with image: {captured_image_path}")  # Debug print
                 send_image_to_owner(captured_image_path)
                 sms_sent_for_current_attempt = True
                 last_detection_time = current_time
