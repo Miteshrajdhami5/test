@@ -200,7 +200,7 @@ def stop_motor():
 
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, 
+    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, \
            sms_sent_for_current_attempt, last_detection_time, sms_send_count
     current_time = datetime.now()
     # Prevent repeated detections within 10 seconds
