@@ -578,3 +578,5 @@ finally:
     stop_motor()
     with camera_lock:
         camera.release()
+        if not reinitialize_camera():
+            print("Warning: Camera reinitialization failed during cleanup")
