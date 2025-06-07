@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import requests
 import serial
 from gpiozero import OutputDevice, InputDevice
@@ -102,7 +104,9 @@ def capture_image_with_face():
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             face_locations = face_recognition.face_locations(rgb_frame)
             if face_locations:
-                captured_image_path = "/home/mrd/Desktop/captured_face.png"
+                # Generate a unique filename using timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                captured_image_path = f"/home/mrd/Desktop/captured_face_{timestamp}.png"
                 cv2.imwrite(captured_image_path, frame)
                 return captured_image_path
             else:
@@ -165,7 +169,7 @@ def step_motor_continuous(delay=0.1):
 
 # Function to stop the motor
 def stop_motor():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, camera, pending_authorization, sms_sent_for_current_attempt
+    global motor_running, vehicle_stopped, server_logs, last_log_time, camera
     motor_running = False
     vehicle_stopped = True
     set_step(0, 0, 0, 0)
@@ -178,62 +182,6 @@ def stop_motor():
     with camera_lock:
         if not reinitialize_camera():
             print("Warning: Camera reinitialization failed after stop")
-    # After stopping, wait for IR sensor and attempt face recognition like at the beginning
-    if vehicle_stopped and not pending_authorization:
-        print("Waiting for IR sensor (finger) detection after stop...")
-        current_time = datetime.now()
-        if (current_time - last_log_time).total_seconds() > 1:
-            new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for IR sensor detection after stop"
-            server_logs.append(new_log)
-            last_log_time = current_time
-        while IR_SENSOR.value and vehicle_stopped:
-            sleep(0.1)
-        if not vehicle_stopped:
-            return
-        print("IR sensor detected finger! Proceeding to face recognition...")
-        current_time = datetime.now()
-        if (current_time - last_log_time).total_seconds() > 1:
-            new_log = f"{current_time.strftime('%H:%M:%S')} - IR sensor detected finger, starting face recognition"
-            server_logs.append(new_log)
-            last_log_time = current_time
-        # Reset state for fresh face detection
-        captured_image_path = None
-        while not captured_image_path and vehicle_stopped and not pending_authorization:
-            captured_image_path = capture_image_with_face()
-            if not captured_image_path:
-                current_time = datetime.now()
-                if (current_time - last_log_time).total_seconds() > 1:
-                    new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
-                    server_logs.append(new_log)
-                    last_log_time = current_time
-                sleep(1)  # Brief pause before retrying
-            else:
-                break
-        if not captured_image_path or not vehicle_stopped:
-            return
-        match_found = compare_faces(captured_image_path)
-        if match_found:
-            print("Face match found! Starting vehicle...")
-            current_time = datetime.now()
-            if (current_time - last_log_time).total_seconds() > 1:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - Face match found! Starting vehicle..."
-                server_logs.append(new_log)
-                last_log_time = current_time
-            threading.Thread(target=step_motor_continuous, args=(100,)).start()
-            vehicle_stopped = False
-            send_sms()
-            sms_sent_for_current_attempt = False
-        else:
-            print("No face match found. Requesting authorization...")
-            current_time = datetime.now()
-            if (current_time - last_log_time).total_seconds() > 1:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - No face match found. Requesting authorization..."
-                server_logs.append(new_log)
-                last_log_time = current_time
-            if not sms_sent_for_current_attempt:
-                send_image_to_owner(captured_image_path)
-                sms_sent_for_current_attempt = True
-            pending_authorization = True
 
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
@@ -245,6 +193,7 @@ def start_vehicle_with_face():
             new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for IR sensor detection"
             server_logs.append(new_log)
             last_log_time = current_time
+
         while IR_SENSOR.value:
             sleep(0.1)
         print("IR sensor detected finger! Proceeding to face recognition...")
@@ -253,6 +202,7 @@ def start_vehicle_with_face():
             new_log = f"{current_time.strftime('%H:%M:%S')} - IR sensor detected finger, starting face recognition"
             server_logs.append(new_log)
             last_log_time = current_time
+
         # Reset state to ensure fresh face detection loop
         captured_image_path = None
         while not captured_image_path and vehicle_stopped:
@@ -264,8 +214,10 @@ def start_vehicle_with_face():
                 sleep(1)  # Brief pause before retrying
             else:
                 break
+
         if not captured_image_path:
             return
+
         match_found = compare_faces(captured_image_path)
         if match_found:
             print("Face match found! Starting vehicle...")
@@ -496,7 +448,7 @@ def index():
                 h1 { font-size: 2.2em; color: #ff4d6d; margin-bottom: 20px; text-shadow: 0 0 10px rgba(255, 77, 109, 0.5); }
                 .button-group { display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px; }
                 .control-btn { display: inline-block; padding: 15px; font-size: 1.1em; text-decoration: none; color: #fff; background: linear-gradient(90deg, #ff4d6d, #4a69bd); border: none; border-radius: 25px; width: 100%; cursor: pointer; transition: transform 0.3s, box-shadow 0.3s; box-shadow: 0 5px 15px rgba(255, 77, 109, 0.4); }
-                .control-btn:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(255, 77, 109, 0.6); }
+                .control-btn:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(255, 77, , 109, 0.6); }
                 .control-btn:active { transform: translateY(0); box-shadow: 0 3px 10px rgba(255, 77, 109, 0.3); }
                 .status-box { margin-top: 20px; padding: 15px; background: rgba(255, 255, 255, 0.05); border-radius: 10px; font-size: 0.9em; color: #a3bffa; max-height: 150px; overflow-y: auto; text-align: left; border: 1px solid rgba(255, 255, 255, 0.1); }
                 .status-log { margin-bottom: 10px; padding: 5px; background: rgba(255, 255, 255, 0.02); border-radius: 5px; }
@@ -529,6 +481,7 @@ def index():
                 const eventSource = new EventSource('/stream');
                 const statusBox = document.getElementById('status-box');
                 let lastLogCount = {{ server_logs|length }};
+
                 eventSource.onmessage = function(event) {
                     const data = JSON.parse(event.data);
                     const currentLogCount = data.logs.length;
@@ -544,9 +497,11 @@ def index():
                         statusBox.scrollTop = statusBox.scrollHeight;
                     }
                 };
+
                 eventSource.onerror = function() {
                     console.error('EventSource failed');
                 };
+
                 function updateStatus(event, element) {
                     event.preventDefault();
                     const url = element.href;
@@ -588,6 +543,7 @@ try:
         new_log = f"{current_time.strftime('%H:%M:%S')} - Waiting for IR sensor and face recognition..."
         server_logs.append(new_log)
         last_log_time = current_time
+
     while True:
         if not pending_authorization:
             try:
