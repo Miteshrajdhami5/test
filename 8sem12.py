@@ -1,4 +1,4 @@
-mimport requests
+import requests
 
 import serial
 
