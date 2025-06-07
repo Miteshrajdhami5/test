@@ -104,7 +104,6 @@ def capture_image_with_face():
             if face_locations:
                 captured_image_path = "/home/mrd/Desktop/captured_face.png"
                 cv2.imwrite(captured_image_path, frame)
-                print(f"Face detected, image saved to {captured_image_path}")
                 return captured_image_path
             else:
                 print("No face detected in the frame. Waiting for a clear face...")
@@ -113,8 +112,7 @@ def capture_image_with_face():
                     new_log = f"{current_time.strftime('%H:%M:%S')} - No face detected, waiting for a clear face"
                     server_logs.append(new_log)
                     last_log_time = current_time
-                sleep(0.5)  # Short delay to allow repositioning
-            retry_count += 1  # Increment retry count even if no face is detected
+                sleep(0.5)
     print("Max retries reached. Camera capture failed.")
     return None
 
@@ -201,16 +199,22 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        captured_image_path = capture_image_with_face()
-        print(f"Debug: capture_image_with_face returned {captured_image_path}")
+        # Reset state to ensure fresh face detection loop
+        captured_image_path = None
+        while not captured_image_path and vehicle_stopped:
+            captured_image_path = capture_image_with_face()
+            if not captured_image_path:
+                new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
+                server_logs.append(new_log)
+                last_log_time = current_time
+                sleep(1)  # Brief pause before retrying
+            else:
+                break
+
         if not captured_image_path:
-            new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image"
-            server_logs.append(new_log)
-            last_log_time = current_time
             return
 
         match_found = compare_faces(captured_image_path)
-        print(f"Debug: compare_faces returned {match_found}")
         if match_found:
             print("Face match found! Starting vehicle...")
             current_time = datetime.now()
@@ -236,7 +240,7 @@ def start_vehicle_with_face():
 
 # Function to send SMS with links
 def send_sms():
-    website_url = 'http://192.168.10.71:5000'
+    website_url = 'http://192.168.10.86:5000'
     message = f"""
     🚗 Vehicle Start Detected!!!
 
@@ -272,7 +276,7 @@ def send_image_to_owner(captured_image_path):
 
     An unknown person tried to start the vehicle.
     Image: {image_link}
-    Check authorization on: http://192.168.10.71:5000
+    Check authorization on: http://192.168.10.86:5000
     """
     try:
         r = requests.post(
@@ -420,10 +424,10 @@ def stream():
 @app.route('/')
 def index():
     global pending_authorization, last_log_time
-    start_url = 'http://192.168.10.71:5000/start_vehicle'
-    stop_url = 'http://192.168.10.71:5000/stop_vehicle'
-    location_url = 'http://192.168.10.71:5000/send_location'
-    map_redirect_url = 'http://192.168.10.71:5000/redirect_to_map'
+    start_url = 'http://192.168.10.86:5000/start_vehicle'
+    stop_url = 'http://192.168.10.86:5000/stop_vehicle'
+    location_url = 'http://192.168.10.86:5000/send_location'
+    map_redirect_url = 'http://192.168.10.86:5000/redirect_to_map'
     if pending_authorization:
         return redirect('/authorize')
     return render_template_string("""
