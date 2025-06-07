@@ -182,7 +182,7 @@ def stop_motor():
 # Function to start the motor with IR sensor and face recognition
 def start_vehicle_with_face():
     global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt
-    while vehicle_stopped:  # Keep looping while vehicle is stopped
+    if vehicle_stopped:
         print("Waiting for IR sensor (finger) detection...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
@@ -190,12 +190,8 @@ def start_vehicle_with_face():
             server_logs.append(new_log)
             last_log_time = current_time
 
-        # Wait for IR sensor to be triggered
-        while IR_SENSOR.value and vehicle_stopped:
+        while IR_SENSOR.value:
             sleep(0.1)
-        if not vehicle_stopped:  # Exit if vehicle state changes (e.g., authorized)
-            return
-
         print("IR sensor detected finger! Proceeding to face recognition...")
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
