@@ -327,19 +327,44 @@ def stream_logs():
             yield f"data: {json.dumps({'logs': server_logs})}\n\n"
             initial_logs = server_logs.copy()
 
-# New function to generate live video stream
+# New function to generate live video stream with diagnostics
 def gen_frames():
-    global camera, camera_lock
+    global camera, camera_lock, server_logs, last_log_time
     while True:
         with camera_lock:
             if not camera.isOpened():
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Camera not opened, attempting reinitialization"
+                    server_logs.append(new_log)
+                    last_log_time = current_time
                 if not reinitialize_camera():
-                    break
+                    current_time = datetime.now()
+                    if (current_time - last_log_time).total_seconds() > 1:
+                        new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to reinitialize camera for live feed"
+                        server_logs.append(new_log)
+                        last_log_time = current_time
+                    sleep(1)
+                    continue
             success, frame = camera.read()
             if not success:
-                break
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to read frame from camera"
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+                sleep(1)
+                continue
             else:
                 ret, buffer = cv2.imencode('.jpg', frame)
+                if not ret:
+                    current_time = datetime.now()
+                    if (current_time - last_log_time).total_seconds() > 1:
+                        new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to encode frame to JPEG"
+                        server_logs.append(new_log)
+                        last_log_time = current_time
+                    sleep(1)
+                    continue
                 frame = buffer.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
