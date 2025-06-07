@@ -258,7 +258,8 @@ def get_location():
 
 # SSE Route for real-time updates
 def stream_logs():
-    global server_logs
+    global server_logs, initial_logs
+    initial_logs = server_logs.copy()  # Initialize here to ensure it’s set
     yield f"data: {json.dumps({'logs': server_logs})}\n\n"
     while True:
         sleep(0.1)
