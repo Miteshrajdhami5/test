@@ -5,7 +5,6 @@ import serial
 from gpiozero import OutputDevice, InputDevice
 from time import sleep
 from flask import Flask, render_template_string, Response, jsonify, redirect, request, send_file
-import threading
 from datetime import datetime
 import json
 import cv2
@@ -14,7 +13,6 @@ import numpy as np
 import os
 import certifi
 import glob
-from queue import Queue
 
 # Pin Definitions
 IN1 = OutputDevice(14)  # Connect to motor IN1
@@ -47,7 +45,6 @@ last_gps_location = "https://www.google.com/maps?q=27.670052333333334,85.438842"
 pending_authorization = False
 sms_sent_for_current_attempt = False
 camera_lock = threading.Lock()
-start_queue = Queue()  # Queue to get result from start_vehicle_with_face
 
 # Directory for reference face images (Desktop as database)
 REFERENCE_IMAGE_DIR = "/home/mrd/Desktop"
@@ -94,7 +91,6 @@ def reinitialize_camera():
             camera = cv2.VideoCapture(i)
             if camera.isOpened():
                 print(f"Attempting camera reinitialization on index {i}")
-                # Test capture 3 times to ensure stability
                 for test in range(3):
                     ret, frame = camera.read()
                     if ret and frame is not None and frame.size > 0:
@@ -110,7 +106,7 @@ def reinitialize_camera():
 # Function to capture an image from the camera and check for a face
 def capture_image_with_face():
     global last_log_time, camera
-    max_retries = 5  # Increased retries
+    max_retries = 5
     retry_count = 0
     with camera_lock:
         while retry_count < max_retries:
@@ -126,11 +122,21 @@ def capture_image_with_face():
                     sleep(2)
                     continue
             ret, frame = camera.read()
-            if not ret or frame is None or frame.size == 0:
-                print(f"Error: Failed to capture image from camera (Retry {retry_count + 1}/{max_retries}) - Frame invalid or empty")
+            if not ret:
+                print(f"Error: Failed to read frame from camera (Retry {retry_count + 1}/{max_retries})")
                 current_time = datetime.now()
                 if (current_time - last_log_time).total_seconds() > 1:
-                    new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to capture image, frame invalid"
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Failed to read frame from camera"
+                    server_logs.append(new_log)
+                    last_log_time = current_time
+                retry_count += 1
+                sleep(2)
+                continue
+            if frame is None or frame.size == 0:
+                print(f"Error: Captured frame is invalid or empty (Retry {retry_count + 1}/{max_retries})")
+                current_time = datetime.now()
+                if (current_time - last_log_time).total_seconds() > 1:
+                    new_log = f"{current_time.strftime('%H:%M:%S')} - Captured frame is invalid or empty"
                     server_logs.append(new_log)
                     last_log_time = current_time
                 retry_count += 1
@@ -279,9 +285,8 @@ def stop_motor():
 
 # Function to start the vehicle with IR sensor and face recognition
 def start_vehicle_with_face():
-    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt, start_queue
-    result = {"success": False, "message": ""}
-    max_attempts = 3  # Limit retries to prevent infinite loop
+    global motor_running, vehicle_stopped, server_logs, last_log_time, pending_authorization, sms_sent_for_current_attempt
+    max_attempts = 3
     attempt = 0
 
     while attempt < max_attempts and vehicle_stopped:
@@ -322,7 +327,7 @@ def start_vehicle_with_face():
                     continue
 
         captured_image_path = None
-        timeout = 30  # 30 seconds timeout
+        timeout = 30
         start_time = datetime.now()
         while not captured_image_path and (datetime.now() - start_time).total_seconds() < timeout and vehicle_stopped:
             captured_image_path = capture_image_with_face()
@@ -357,10 +362,7 @@ def start_vehicle_with_face():
             vehicle_stopped = False
             send_sms()
             sms_sent_for_current_attempt = False
-            result["success"] = True
-            result["message"] = "Vehicle started successfully"
-            start_queue.put(result)
-            return
+            return True
         else:
             print("No face match found. Requesting authorization...")
             current_time = datetime.now()
@@ -372,22 +374,15 @@ def start_vehicle_with_face():
                 send_image_to_owner(captured_image_path)
                 sms_sent_for_current_attempt = True
             pending_authorization = True
-            result["message"] = "No face match, authorization required"
-            start_queue.put(result)
-            return
+            return False
 
-        attempt += 1
-        sleep(2)
-
-    # If all attempts fail
     print(f"Failed all {max_attempts} attempts to start vehicle")
     current_time = datetime.now()
     if (current_time - last_log_time).total_seconds() > 1:
         new_log = f"{current_time.strftime('%H:%M:%S')} - Failed all {max_attempts} attempts to start vehicle"
         server_logs.append(new_log)
         last_log_time = current_time
-    result["message"] = f"Failed after {max_attempts} attempts"
-    start_queue.put(result)
+    return False
 
 # Function to send SMS with links
 def send_sms():
@@ -503,32 +498,36 @@ def stop_motor_web():
 
 @app.route('/start_vehicle', methods=['GET'])
 def start_motor_web():
-    global server_logs, last_log_time, start_queue
+    global server_logs, last_log_time
     print("Starting vehicle via web...")
-    start_queue.queue.clear()  # Clear any previous results
-    threading.Thread(target=start_vehicle_with_face).start()
-    # Wait for result with a 40-second timeout (accounting for multiple attempts)
-    try:
-        result = start_queue.get(timeout=40)
-        if result["success"]:
+    # Reset all states before starting
+    global vehicle_stopped, pending_authorization, sms_sent_for_current_attempt
+    vehicle_stopped = True
+    pending_authorization = False
+    sms_sent_for_current_attempt = False
+    with camera_lock:
+        if not reinitialize_camera():
             current_time = datetime.now()
             if (current_time - last_log_time).total_seconds() > 1:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - {result['message']}"
+                new_log = f"{current_time.strftime('%H:%M:%S')} - Camera reinitialization failed, start aborted"
                 server_logs.append(new_log)
                 last_log_time = current_time
-        else:
-            current_time = datetime.now()
-            if (current_time - last_log_time).total_seconds() > 1:
-                new_log = f"{current_time.strftime('%H:%M:%S')} - Start failed: {result['message']}"
-                server_logs.append(new_log)
-                last_log_time = current_time
-    except Exception as e:
-        print(f"Timeout or error waiting for start result: {e}")
+            return jsonify({"logs": server_logs})
+
+    # Run face recognition synchronously
+    if start_vehicle_with_face():
         current_time = datetime.now()
         if (current_time - last_log_time).total_seconds() > 1:
-            new_log = f"{current_time.strftime('%H:%M:%S')} - Timeout or error waiting for start: {e}"
+            new_log = f"{current_time.strftime('%H:%M:%S')} - Vehicle started successfully after face recognition"
             server_logs.append(new_log)
             last_log_time = current_time
+    else:
+        current_time = datetime.now()
+        if (current_time - last_log_time).total_seconds() > 1:
+            new_log = f"{current_time.strftime('%H:%M:%S')} - Vehicle start failed, awaiting authorization"
+            server_logs.append(new_log)
+            last_log_time = current_time
+
     return jsonify({"logs": server_logs})
 
 @app.route('/send_location', methods=['GET'])
@@ -748,4 +747,4 @@ finally:
     print("Cleaning up...")
     stop_motor()
     with camera_lock:
-        camera.release()
+        camera.release()                                                                                                                `````````````````````````````````````````````   1111111111111`111111``qq
