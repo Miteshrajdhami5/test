@@ -722,3 +722,4 @@ if __name__ == '__main__':
                 log_message = "Camera released"
                 print(log_message)
                 server_logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {log_message}")
+
